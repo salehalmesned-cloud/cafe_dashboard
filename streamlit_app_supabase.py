@@ -183,8 +183,8 @@ def main():
         status_filter = cols[2].selectbox("تصفية بحسب الحالة", options=["الكل"] + sorted(expenses['status'].dropna().unique()))
         # Date range
         date_col1, date_col2 = st.columns(2)
-        min_date = expenses['expense_date'].min().date() if not expenses['expense_date'].isna().all() else datetime.date.today()
-        max_date = expenses['expense_date'].max().date() if not expenses['expense_date'].isna().all() else datetime.date.today()
+        min_date = expenses['expense_date'].min() if not expenses['expense_date'].isna().all() else datetime.date.today()
+        max_date = expenses['expense_date'].max() if not expenses['expense_date'].isna().all() else datetime.date.today()
         start_date = date_col1.date_input("من تاريخ", value=min_date)
         end_date = date_col2.date_input("إلى تاريخ", value=max_date)
 
