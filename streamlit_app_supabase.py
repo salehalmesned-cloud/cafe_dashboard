@@ -238,21 +238,21 @@ def main():
         # Charts
         chart_tab1, chart_tab2 = st.tabs(["المصروفات مقابل المبيعات", "أعلى الشركات صرفًا"])
         with chart_tab1:
-            # merge with sales
-if not summary_month.empty:
-    # جهّز ملخص المبيعات مع عمود period
-    if sales.empty:
-        sales_summary = pd.DataFrame(columns=['period', 'amount'])
+    if not summary_month.empty:
+        merged = summary_month.merge(sales_summary[['period', 'amount']], on='period', how='left', suffixes=("_expenses", "_sales"))
+        fig, ax = plt.subplots()
+        ax.plot(merged['period'], merged['amount_expenses'], label='المصروفات')
+        if 'amount_sales' in merged.columns and not merged['amount_sales'].isna().all():
+            ax.plot(merged['period'], merged['amount_sales'], label='المبيعات')
+        ax.set_title("المصروفات مقابل المبيعات")
+        ax.set_xlabel("الفترة (سنة-شهر)")
+        ax.set_ylabel("القيمة")
+        ax.legend()
+        plt.xticks(rotation=45, ha='right')
+        st.pyplot(fig)
     else:
-        sales_summary = sales.copy()
-        sales_summary['period'] = (
-            sales_summary['year'].astype(str) + '-' +
-            sales_summary['month'].astype(str).str.zfill(2)
-        )
+        st.write("لا توجد بيانات لعرض الرسم")
 
-    # دمج المصروفات مع المبيعات (إن وُجدت)
-    merged = summary_month.merge(
-        sales_summary[['period', 'amount']] if not sales_summary.empty else pd.DataFrame(columns=['period', 'amount']),
         on='period',
         how='left',
         suffixes=("_expenses", "_sales")
