@@ -32,14 +32,17 @@ import streamlit as st
 import matplotlib.pyplot as plt
 
 
+import streamlit as st
+
 def get_connection():
-    """Return a new database connection using environment vars."""
-    host = os.environ.get("PGHOST")
-    port = os.environ.get("PGPORT", 5432)
-    database = os.environ.get("PGDATABASE")
-    user = os.environ.get("PGUSER")
-    password = os.environ.get("PGPASSWORD")
-    sslmode = os.environ.get("SSLMODE", "require")
+    # قراءة بيانات الاتصال من Streamlit secrets أو من متغيرات البيئة كخيار احتياطي
+    host = st.secrets.get("PGHOST") or os.environ.get("PGHOST")
+    port = st.secrets.get("PGPORT") or os.environ.get("PGPORT", 5432)
+    database = st.secrets.get("PGDATABASE") or os.environ.get("PGDATABASE")
+    user = st.secrets.get("PGUSER") or os.environ.get("PGUSER")
+    password = st.secrets.get("PGPASSWORD") or os.environ.get("PGPASSWORD")
+    sslmode = st.secrets.get("SSLMODE") or os.environ.get("SSLMODE", "require")
+
     conn = psycopg2.connect(
         host=host,
         port=port,
@@ -50,6 +53,7 @@ def get_connection():
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
     return conn
+
 
 
 @st.cache_data(ttl=300)
