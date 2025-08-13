@@ -239,20 +239,57 @@ def main():
         chart_tab1, chart_tab2 = st.tabs(["المصروفات مقابل المبيعات", "أعلى الشركات صرفًا"])
         with chart_tab1:
             # merge with sales
-            if not summary_month.empty:
-                sales_summary = sales.copy()
-                fig, ax = plt.subplots()
-                ax.plot(merged['period'], merged['amount_expenses'], label='المصروفات')
-                if not merged['amount_sales'].isna().all():
-                    ax.plot(merged['period'], merged['amount_sales'], label='المبيعات')
-                ax.set_title("المصروفات مقابل المبيعات")
-                ax.set_xlabel("الفترة (سنة-شهر)")
-                ax.set_ylabel("القيمة")
-                ax.legend()
-                plt.xticks(rotation=45, ha='right')
-                st.pyplot(fig)
-            else:
-                st.write("لا توجد بيانات لعرض الرسم")
+if not summary_month.empty:
+    # جهّز ملخص المبيعات مع عمود period
+    if sales.empty:
+        sales_summary = pd.DataFrame(columns=['period', 'amount'])
+    else:
+        sales_summary = sales.copy()
+        sales_summary['period'] = (
+            sales_summary['year'].astype(str) + '-' +
+            sales_summary['month'].astype(str).str.zfill(2)
+        )
+
+    # دمج المصروفات مع المبيعات (إن وُجدت)
+    merged = summary_month.merge(
+        sales_summary[['period', 'amount']] if not sales_summary.empty else pd.DataFrame(columns=['period', 'amount']),
+        on='period',
+        how='left',
+        suffixes=("_expenses", "_sales")
+    )
+
+    # توحيد أسماء الأعمدة بعد الدمج (تجنّب amount_x/amount_y)
+    if 'amount_expenses' not in merged.columns:
+        if 'amount_x' in merged.columns:
+            merged = merged.rename(columns={'amount_x': 'amount_expenses'})
+        elif 'amount' in merged.columns:
+            merged = merged.rename(columns={'amount': 'amount_expenses'})
+    if 'amount_sales' not in merged.columns and 'amount_y' in merged.columns:
+        merged = merged.rename(columns={'amount_y': 'amount_sales'})
+
+    # تحويل القيم إلى رقمية ومعالجة الفراغات
+    merged['amount_expenses'] = pd.to_numeric(merged.get('amount_expenses', 0), errors='coerce').fillna(0)
+    if 'amount_sales' in merged.columns:
+        merged['amount_sales'] = pd.to_numeric(merged['amount_sales'], errors='coerce').fillna(0)
+    else:
+        merged['amount_sales'] = 0
+
+    # ترتيب الفترات ثم الرسم
+    merged = merged.sort_values('period')
+
+    fig, ax = plt.subplots()
+    if 'amount_expenses' in merged.columns:
+        ax.plot(merged['period'], merged['amount_expenses'], label='المصروفات')
+    if 'amount_sales' in merged.columns and not merged['amount_sales'].isna().all():
+        ax.plot(merged['period'], merged['amount_sales'], label='المبيعات')
+    ax.set_title("المصروفات مقابل المبيعات")
+    ax.set_xlabel("الفترة (سنة-شهر)")
+    ax.set_ylabel("القيمة")
+    ax.legend()
+    plt.xticks(rotation=45, ha='right')
+    st.pyplot(fig)
+else:
+    st.write("لا توجد بيانات لعرض الرسم")
 
         with chart_tab2:
             if not summary_company.empty:
