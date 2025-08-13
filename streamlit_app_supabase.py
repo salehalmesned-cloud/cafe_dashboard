@@ -1,41 +1,19 @@
 """
-Streamlit dashboard for managing cafe expenses and sales.
-
-This application connects to a PostgreSQL database (e.g. Supabase)
-using environment variables for connection details. It allows the
-user to:
-
-* View, filter and search expense records
-* Add new companies, expenses and monthly sales
-* See aggregated statistics (total spent, outstanding)
-* Download filtered data or summaries as CSV/Excel
-* Visualise monthly expenses versus sales and top companies
-
-To run locally, install streamlit and psycopg2:
-    pip install streamlit pandas psycopg2-binary
-
-Ensure the following environment variables are set:
-    PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, SSLMODE
-
-Then run:
-    streamlit run streamlit_app_interactive.py
-
+Streamlit dashboard for managing cafe expenses and sales (Supabase / Postgres).
 """
 
 import os
 import datetime
 import pandas as pd
-import numpy as np
 import psycopg2
 import psycopg2.extras
 import streamlit as st
 import matplotlib.pyplot as plt
 
 
-import streamlit as st
-
+# ---------- DB CONNECTION ----------
 def get_connection():
-    # قراءة بيانات الاتصال من Streamlit secrets أو من متغيرات البيئة كخيار احتياطي
+    """Connect to Postgres using Streamlit Secrets (fallback to env)."""
     host = st.secrets.get("PGHOST") or os.environ.get("PGHOST")
     port = st.secrets.get("PGPORT") or os.environ.get("PGPORT", 5432)
     database = st.secrets.get("PGDATABASE") or os.environ.get("PGDATABASE")
@@ -55,23 +33,37 @@ def get_connection():
     return conn
 
 
-
+# ---------- DATA IO ----------
 @st.cache_data(ttl=300)
 def load_data():
-    """Load expenses, companies and sales data from the database."""
+    """Load companies, expenses, sales from DB and do minimal typing."""
     conn = get_connection()
     dfs = {}
     with conn.cursor() as cur:
+        # companies
         cur.execute("SELECT * FROM companies ORDER BY name;")
-        dfs['companies'] = pd.DataFrame(cur.fetchall())
+        dfs["companies"] = pd.DataFrame(cur.fetchall())
+
+        # expenses
         cur.execute("SELECT * FROM expenses ORDER BY id;")
         expenses = pd.DataFrame(cur.fetchall())
         if not expenses.empty:
-            expenses['amount'] = pd.to_numeric(expenses['amount'], errors='coerce')
-            expenses['expense_date'] = pd.to_datetime(expenses['expense_date'], errors='coerce').dt.date
-        dfs['expenses'] = expenses
+            expenses["amount"] = pd.to_numeric(expenses["amount"], errors="coerce")
+            # ensure date column is datetime.date
+            expenses["expense_date"] = pd.to_datetime(
+                expenses["expense_date"], errors="coerce"
+            ).dt.date
+        dfs["expenses"] = expenses
+
+        # sales
         cur.execute("SELECT * FROM sales ORDER BY year, month;")
-        dfs['sales'] = pd.DataFrame(cur.fetchall())
+        sales = pd.DataFrame(cur.fetchall())
+        if not sales.empty:
+            sales["amount"] = pd.to_numeric(sales["amount"], errors="coerce").fillna(0)
+            sales["year"] = pd.to_numeric(sales["year"], errors="coerce").fillna(0).astype(int)
+            sales["month"] = pd.to_numeric(sales["month"], errors="coerce").fillna(0).astype(int)
+            sales["period"] = sales["year"].astype(str) + "-" + sales["month"].astype(str).str.zfill(2)
+        dfs["sales"] = sales
     conn.close()
     return dfs
 
@@ -79,12 +71,22 @@ def load_data():
 def insert_company(name: str) -> None:
     conn = get_connection()
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO companies (name) VALUES (%s) ON CONFLICT (name) DO NOTHING;", (name,))
+        cur.execute(
+            "INSERT INTO companies (name) VALUES (%s) ON CONFLICT (name) DO NOTHING;",
+            (name,),
+        )
         conn.commit()
     conn.close()
 
 
-def insert_expense(expense_number: str, amount: float, amount_raw: str, company_id: int, status: str, date: datetime.date) -> None:
+def insert_expense(
+    expense_number: str,
+    amount: float,
+    amount_raw: str,
+    company_id: int,
+    status: str,
+    date: datetime.date,
+) -> None:
     conn = get_connection()
     with conn.cursor() as cur:
         cur.execute(
@@ -122,11 +124,12 @@ def upsert_sales(month: int, year: int, amount: float) -> None:
     conn.close()
 
 
+# ---------- APP ----------
 def main():
     st.set_page_config(page_title="لوحة تحكم المقهي", layout="wide")
     st.title("لوحة تحكم المصروفات والمبيعات للمقهي")
 
-    # Sidebar for adding records
+    # Sidebar: create
     st.sidebar.header("إضافة بيانات جديدة")
 
     with st.sidebar.expander("إضافة شركة"):
@@ -137,195 +140,212 @@ def main():
             st.cache_data.clear()
 
     with st.sidebar.expander("إضافة مصروف"):
-        dfs = load_data()
-        company_names = dfs['companies']
+        dfs_now = load_data()
+        company_names = dfs_now["companies"]
         expense_number = st.text_input("رقم الصرف")
-        amount_raw = st.text_input("المبلغ")
+        amount_raw = st.text_input("المبلغ (نصي)")
         amount_val = st.number_input("المبلغ (رقمي)", min_value=0.0, step=0.1)
-        company_options = company_names['name'].tolist() if not company_names.empty else []
+        company_options = company_names["name"].tolist() if not company_names.empty else []
         company_name = st.selectbox("الشركة", options=company_options)
-        status_options = sorted(dfs['expenses']['status'].dropna().unique()) if not dfs['expenses'].empty else []
+        status_options = (
+            sorted(dfs_now["expenses"]["status"].dropna().unique())
+            if not dfs_now["expenses"].empty
+            else []
+        )
         status_value = st.selectbox("الحالة", options=status_options + ["تم الصرف", "لم يتم"])
         date_value = st.date_input("التاريخ", value=datetime.date.today())
         if st.button("إضافة المصروف") and expense_number and company_name:
-            # fetch company id
             company_id = None
             if not company_names.empty:
-                rec = company_names.loc[company_names['name'] == company_name]
+                rec = company_names.loc[company_names["name"] == company_name]
                 if not rec.empty:
-                    company_id = rec.iloc[0]['id']
-            insert_expense(expense_number, amount_val, amount_raw, company_id, status_value, date_value)
+                    company_id = int(rec.iloc[0]["id"])
+            insert_expense(
+                expense_number, float(amount_val), amount_raw, company_id, status_value, date_value
+            )
             st.success("تم إضافة المصروف بنجاح")
             st.cache_data.clear()
 
     with st.sidebar.expander("إضافة مبيعات شهرية"):
-        month_names = {1:"يناير",2:"فبراير",3:"مارس",4:"أبريل",5:"مايو",6:"يونيو",7:"يوليو",8:"أغسطس",9:"سبتمبر",10:"أكتوبر",11:"نوفمبر",12:"ديسمبر"}
+        month_names = {
+            1: "يناير",
+            2: "فبراير",
+            3: "مارس",
+            4: "أبريل",
+            5: "مايو",
+            6: "يونيو",
+            7: "يوليو",
+            8: "أغسطس",
+            9: "سبتمبر",
+            10: "أكتوبر",
+            11: "نوفمبر",
+            12: "ديسمبر",
+        }
         month_num = st.selectbox("الشهر", options=list(month_names.keys()), format_func=lambda x: month_names[x])
         year_num = st.number_input("السنة", value=datetime.date.today().year, step=1)
         sales_amount = st.number_input("قيمة المبيعات", min_value=0.0, step=0.1)
         if st.button("تسجيل المبيعات"):
-            upsert_sales(month_num, int(year_num), sales_amount)
+            upsert_sales(int(month_num), int(year_num), float(sales_amount))
             st.success("تم تسجيل المبيعات")
             st.cache_data.clear()
 
-    # Main content
+    # Main data
     dfs = load_data()
-    expenses = dfs['expenses']
-    companies = dfs['companies']
-    sales = dfs['sales']
+    expenses = dfs["expenses"]
+    companies = dfs["companies"]
+    sales = dfs["sales"]
 
-    # Filters
     st.subheader("عرض البيانات")
-    if not expenses.empty:
-        # Search and filters
-        cols = st.columns(3)
-        search_term = cols[0].text_input("بحث عن رقم الصرف أو المبلغ أو الشركة")
-        company_filter = cols[1].selectbox("تصفية بحسب الشركة", options=["الكل"] + companies['name'].tolist()) if not companies.empty else "الكل"
-        status_filter = cols[2].selectbox("تصفية بحسب الحالة", options=["الكل"] + sorted(expenses['status'].dropna().unique()))
-        # Date range
-        date_col1, date_col2 = st.columns(2)
-        min_date = expenses['expense_date'].min() if not expenses['expense_date'].isna().all() else datetime.date.today()
-        max_date = expenses['expense_date'].max() if not expenses['expense_date'].isna().all() else datetime.date.today()
-        start_date = date_col1.date_input("من تاريخ", value=min_date)
-        end_date = date_col2.date_input("إلى تاريخ", value=max_date)
 
-        filtered = expenses.copy()
-        # apply date filter
-        filtered = filtered[(filtered['expense_date'] >= start_date) & (filtered['expense_date'] <= end_date)]
-        # apply search
-        if search_term:
-            mask = (
-                filtered['expense_number'].astype(str).str.contains(search_term, case=False, na=False) |
-                filtered['amount_raw'].astype(str).str.contains(search_term, case=False, na=False) |
-                filtered['amount'].astype(str).str.contains(search_term, case=False, na=False)
-            )
-            filtered = filtered[mask]
-        # apply company filter
-        if company_filter != "الكل":
-            cid = companies.loc[companies['name'] == company_filter, 'id'].iloc[0]
-            filtered = filtered[filtered['company_id'] == cid]
-        # apply status filter
-        if status_filter != "الكل":
-            filtered = filtered[filtered['status'] == status_filter]
+    if expenses.empty:
+        st.info("لا توجد سجلات مصروفات حتى الآن. يرجى إضافة مصروفات لعرض البيانات.")
+        return
 
-        # Display table
-        st.dataframe(
-            filtered[["id", "expense_number", "amount", "company_id", "status", "expense_date"]]
-            .rename(columns={
+    # ---- Filters ----
+    cols = st.columns(3)
+    search_term = cols[0].text_input("بحث عن رقم الصرف أو المبلغ أو الشركة")
+    company_filter = (
+        cols[1].selectbox("تصفية بحسب الشركة", options=["الكل"] + companies["name"].tolist())
+        if not companies.empty
+        else "الكل"
+    )
+    status_filter = cols[2].selectbox(
+        "تصفية بحسب الحالة", options=["الكل"] + sorted(expenses["status"].dropna().unique())
+    )
+
+    # Date range
+    date_col1, date_col2 = st.columns(2)
+    min_date = expenses["expense_date"].min() if not expenses["expense_date"].isna().all() else datetime.date.today()
+    max_date = expenses["expense_date"].max() if not expenses["expense_date"].isna().all() else datetime.date.today()
+    start_date = date_col1.date_input("من تاريخ", value=min_date)
+    end_date = date_col2.date_input("إلى تاريخ", value=max_date)
+
+    # Apply filters
+    filtered = expenses.copy()
+    filtered = filtered[(filtered["expense_date"] >= start_date) & (filtered["expense_date"] <= end_date)]
+
+    if search_term:
+        mask = (
+            filtered["expense_number"].astype(str).str.contains(search_term, case=False, na=False)
+            | filtered["amount_raw"].astype(str).str.contains(search_term, case=False, na=False)
+            | filtered["amount"].astype(str).str.contains(search_term, case=False, na=False)
+        )
+        filtered = filtered[mask]
+
+    if company_filter != "الكل" and not companies.empty:
+        cid = companies.loc[companies["name"] == company_filter, "id"].iloc[0]
+        filtered = filtered[filtered["company_id"] == cid]
+
+    if status_filter != "الكل":
+        filtered = filtered[filtered["status"] == status_filter]
+
+    # Table
+    st.dataframe(
+        filtered[["id", "expense_number", "amount", "company_id", "status", "expense_date"]].rename(
+            columns={
                 "expense_number": "رقم الصرف",
                 "amount": "المبلغ",
                 "company_id": "الشركة",
                 "status": "الحالة",
                 "expense_date": "التاريخ",
-            })
+            }
         )
-
-        # Aggregations
-        total_spent = filtered['amount'].sum()
-        unpaid_total = filtered.loc[filtered['status'] != 'تم الصرف', 'amount'].sum()
-        kpi1, kpi2 = st.columns(2)
-        kpi1.metric("إجمالي المصروفات", f"{total_spent:,.2f}")
-        kpi2.metric("إجمالي غير مدفوع", f"{unpaid_total:,.2f}")
-
-        # Summaries
-        summary_month = filtered.groupby(['year','month'])['amount'].sum().reset_index()
-        summary_month['period'] = summary_month['year'].astype(str) + '-' + summary_month['month'].astype(str).str.zfill(2)
-        summary_company = filtered.groupby('company_id')['amount'].sum().reset_index()
-        if not summary_company.empty:
-            summary_company = summary_company.merge(companies[['id','name']], left_on='company_id', right_on='id', how='left')
-        summary_company = summary_company.sort_values('amount', ascending=False)
-
-        # Charts
-        chart_tab1, chart_tab2 = st.tabs(["المصروفات مقابل المبيعات", "أعلى الشركات صرفًا"])
-        with chart_tab1:
-    if not summary_month.empty:
-        merged = summary_month.merge(
-            sales_summary[['period', 'amount']],
-            on='period',
-            how='left',
-            suffixes=("_expenses", "_sales")
-        )
-        fig, ax = plt.subplots()
-        ax.plot(merged['period'], merged['amount_expenses'], label='المصروفات')
-        if 'amount_sales' in merged.columns and not merged['amount_sales'].isna().all():
-            ax.plot(merged['period'], merged['amount_sales'], label='المبيعات')
-        ax.set_title("المصروفات مقابل المبيعات")
-        ax.set_xlabel("الفترة (سنة-شهر)")
-        ax.set_ylabel("القيمة")
-        ax.legend()
-        plt.xticks(rotation=45, ha='right')
-        st.pyplot(fig)
-    else:
-        st.write("لا توجد بيانات لعرض الرسم")
-
-        on='period',
-        how='left',
-        suffixes=("_expenses", "_sales")
     )
 
-    # توحيد أسماء الأعمدة بعد الدمج (تجنّب amount_x/amount_y)
-    if 'amount_expenses' not in merged.columns:
-        if 'amount_x' in merged.columns:
-            merged = merged.rename(columns={'amount_x': 'amount_expenses'})
-        elif 'amount' in merged.columns:
-            merged = merged.rename(columns={'amount': 'amount_expenses'})
-    if 'amount_sales' not in merged.columns and 'amount_y' in merged.columns:
-        merged = merged.rename(columns={'amount_y': 'amount_sales'})
+    # KPIs
+    total_spent = filtered["amount"].sum()
+    unpaid_total = filtered.loc[filtered["status"] != "تم الصرف", "amount"].sum()
+    k1, k2 = st.columns(2)
+    k1.metric("إجمالي المصروفات", f"{total_spent:,.2f}")
+    k2.metric("إجمالي غير مدفوع", f"{unpaid_total:,.2f}")
 
-    # تحويل القيم إلى رقمية ومعالجة الفراغات
-    merged['amount_expenses'] = pd.to_numeric(merged.get('amount_expenses', 0), errors='coerce').fillna(0)
-    if 'amount_sales' in merged.columns:
-        merged['amount_sales'] = pd.to_numeric(merged['amount_sales'], errors='coerce').fillna(0)
-    else:
-        merged['amount_sales'] = 0
-
-    # ترتيب الفترات ثم الرسم
-    merged = merged.sort_values('period')
-
-    fig, ax = plt.subplots()
-    if 'amount_expenses' in merged.columns:
-        ax.plot(merged['period'], merged['amount_expenses'], label='المصروفات')
-    if 'amount_sales' in merged.columns and not merged['amount_sales'].isna().all():
-        ax.plot(merged['period'], merged['amount_sales'], label='المبيعات')
-    ax.set_title("المصروفات مقابل المبيعات")
-    ax.set_xlabel("الفترة (سنة-شهر)")
-    ax.set_ylabel("القيمة")
-    ax.legend()
-    plt.xticks(rotation=45, ha='right')
-    st.pyplot(fig)
-else:
-    st.write("لا توجد بيانات لعرض الرسم")
-
-        with chart_tab2:
-            if not summary_company.empty:
-                top_n = summary_company.head(10)
-                fig, ax = plt.subplots()
-                ax.bar(top_n['name'], top_n['amount'])
-                ax.set_title("أعلى الشركات صرفًا")
-                ax.set_xlabel("الشركة")
-                ax.set_ylabel("المبلغ")
-                plt.xticks(rotation=45, ha='right')
-                st.pyplot(fig)
-            else:
-                st.write("لا توجد بيانات للعرض")
-
-        # Download buttons
-        st.subheader("تحميل البيانات")
-        csv = filtered.to_csv(index=False)
-        st.download_button(
-            label="تحميل البيانات المحددة (CSV)",
-            data=csv,
-            file_name="expenses_filtered.csv",
-            mime="text/csv",
+    # Summaries
+    summary_month = filtered.groupby(["year", "month"])["amount"].sum().reset_index()
+    if not summary_month.empty:
+        summary_month["period"] = summary_month["year"].astype(str) + "-" + summary_month["month"].astype(str).str.zfill(2)
+    summary_company = (
+        filtered.groupby("company_id")["amount"].sum().reset_index().sort_values("amount", ascending=False)
+    )
+    if not summary_company.empty and not companies.empty:
+        summary_company = summary_company.merge(
+            companies[["id", "name"]], left_on="company_id", right_on="id", how="left"
         )
-        # Monthly summary and company summary downloads
-        sm_csv = summary_month.to_csv(index=False)
+
+    # ---- Charts ----
+    chart_tab1, chart_tab2 = st.tabs(["المصروفات مقابل المبيعات", "أعلى الشركات صرفًا"])
+
+    with chart_tab1:
+        if not summary_month.empty:
+            # prepare sales summary (period, amount)
+            if sales.empty:
+                sales_summary = pd.DataFrame(columns=["period", "amount"])
+            else:
+                sales_summary = sales[["period", "amount"]].copy()
+
+            merged = summary_month.merge(
+                sales_summary if not sales_summary.empty else pd.DataFrame(columns=["period", "amount"]),
+                on="period",
+                how="left",
+                suffixes=("_expenses", "_sales"),
+            )
+
+            # normalize column names (amount_x/amount_y cases)
+            if "amount_expenses" not in merged.columns:
+                if "amount_x" in merged.columns:
+                    merged = merged.rename(columns={"amount_x": "amount_expenses"})
+                elif "amount" in merged.columns:
+                    merged = merged.rename(columns={"amount": "amount_expenses"})
+            if "amount_sales" not in merged.columns and "amount_y" in merged.columns:
+                merged = merged.rename(columns={"amount_y": "amount_sales"})
+
+            merged["amount_expenses"] = pd.to_numeric(merged.get("amount_expenses", 0), errors="coerce").fillna(0)
+            if "amount_sales" in merged.columns:
+                merged["amount_sales"] = pd.to_numeric(merged["amount_sales"], errors="coerce").fillna(0)
+            else:
+                merged["amount_sales"] = 0
+
+            merged = merged.sort_values("period")
+
+            fig, ax = plt.subplots()
+            ax.plot(merged["period"], merged["amount_expenses"], label="المصروفات")
+            if "amount_sales" in merged.columns and not merged["amount_sales"].isna().all():
+                ax.plot(merged["period"], merged["amount_sales"], label="المبيعات")
+            ax.set_title("المصروفات مقابل المبيعات")
+            ax.set_xlabel("الفترة (سنة-شهر)")
+            ax.set_ylabel("القيمة")
+            ax.legend()
+            plt.xticks(rotation=45, ha="right")
+            st.pyplot(fig)
+        else:
+            st.write("لا توجد بيانات لعرض الرسم")
+
+    with chart_tab2:
+        if not summary_company.empty:
+            top_n = summary_company.head(10)
+            fig, ax = plt.subplots()
+            ax.bar(top_n["name"], top_n["amount"])
+            ax.set_title("أعلى الشركات صرفًا")
+            ax.set_xlabel("الشركة")
+            ax.set_ylabel("القيمة")
+            plt.xticks(rotation=45, ha="right")
+            st.pyplot(fig)
+        else:
+            st.write("لا توجد بيانات للعرض")
+
+    # ---- Downloads ----
+    st.subheader("تحميل البيانات")
+    st.download_button(
+        "تحميل البيانات المحددة (CSV)",
+        data=filtered.to_csv(index=False),
+        file_name="expenses_filtered.csv",
+        mime="text/csv",
+    )
+    sm_csv = summary_month.to_csv(index=False) if not summary_month.empty else ""
+    if sm_csv:
         st.download_button("تحميل ملخص شهري (CSV)", sm_csv, "summary_month.csv", mime="text/csv")
-        sc_csv = summary_company[['name','amount']].to_csv(index=False) if not summary_company.empty else ""
-        if sc_csv:
-            st.download_button("تحميل ملخص الشركات (CSV)", sc_csv, "summary_company.csv", mime="text/csv")
-    else:
-        st.info("لا توجد سجلات مصروفات حتى الآن. يرجى إضافة مصروفات لعرض البيانات.")
+    if not summary_company.empty:
+        sc_csv = summary_company[["name", "amount"]].to_csv(index=False)
+        st.download_button("تحميل ملخص الشركات (CSV)", sc_csv, "summary_company.csv", mime="text/csv")
 
 
 if __name__ == "__main__":
