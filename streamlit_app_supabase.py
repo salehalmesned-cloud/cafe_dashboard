@@ -239,7 +239,12 @@ def main():
         chart_tab1, chart_tab2 = st.tabs(["المصروفات مقابل المبيعات", "أعلى الشركات صرفًا"])
         with chart_tab1:
     if not summary_month.empty:
-        merged = summary_month.merge(sales_summary[['period', 'amount']], on='period', how='left', suffixes=("_expenses", "_sales"))
+        merged = summary_month.merge(
+            sales_summary[['period', 'amount']],
+            on='period',
+            how='left',
+            suffixes=("_expenses", "_sales")
+        )
         fig, ax = plt.subplots()
         ax.plot(merged['period'], merged['amount_expenses'], label='المصروفات')
         if 'amount_sales' in merged.columns and not merged['amount_sales'].isna().all():
