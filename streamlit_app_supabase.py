@@ -68,6 +68,7 @@ def load_data():
         expenses = pd.DataFrame(cur.fetchall())
         if not expenses.empty:
             expenses['amount'] = pd.to_numeric(expenses['amount'], errors='coerce')
+            expenses['expense_date'] = pd.to_datetime(expenses['expense_date'], errors='coerce').dt.date
         dfs['expenses'] = expenses
         cur.execute("SELECT * FROM sales ORDER BY year, month;")
         dfs['sales'] = pd.DataFrame(cur.fetchall())
@@ -190,7 +191,7 @@ def main():
 
         filtered = expenses.copy()
         # apply date filter
-        filtered = filtered[(filtered['expense_date'] >= pd.Timestamp(start_date)) & (filtered['expense_date'] <= pd.Timestamp(end_date))]
+        filtered = filtered[(filtered['expense_date'] >= start_date) & (filtered['expense_date'] <= end_date)]
         # apply search
         if search_term:
             mask = (
