@@ -241,9 +241,6 @@ def main():
             # merge with sales
             if not summary_month.empty:
                 sales_summary = sales.copy()
-                if not sales_summary.empty:
-                    sales_summary['period'] = sales_summary['year'].astype(str) + '-' + sales_summary['month'].astype(str).str.zfill(2)
-                merged = summary_month.merge(sales_summary[['period','amount']], on='period', how='left', suffixes=("_expenses", "_sales"))
                 fig, ax = plt.subplots()
                 ax.plot(merged['period'], merged['amount_expenses'], label='المصروفات')
                 if not merged['amount_sales'].isna().all():
